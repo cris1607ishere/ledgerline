@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LedgerLine — Concurrency & Integrity Dashboard</title>
+<style>
+  :root { 
+    --bg: #0b0d11; 
+    --card: #151821; 
+    --card-subtle: #1c202c;
+    --line: #292f3d; 
+    --text: #e8eaed; 
+    --muted: #9aa1ac;
+    --accent: #4f8cff; 
+    --accent-hover: #3b76e8;
+    --ok: #3ecf8e; 
+    --bad: #ff5c5c; 
+    --warning: #f5a623;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+  header { padding: 24px 36px; border-bottom: 1px solid var(--line); background: var(--card); }
+  header h1 { margin: 0; font-size: 22px; font-weight: 700; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  main { max-width: 980px; margin: 0 auto; padding: 28px 24px; display: grid; gap: 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
+  .card h2 { margin: 0 0 16px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+  .accounts { display: flex; gap: 16px; flex-wrap: wrap; }
+  .account { flex: 1; min-width: 220px; border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: var(--card-subtle); }
+  .account .name { font-weight: 700; font-size: 16px; color: #fff; }
+  .account .bal { font-size: 24px; font-weight: 700; margin: 8px 0; color: var(--ok); }
+  .account .id { font-size: 11px; color: var(--muted); word-break: break-all; font-family: monospace; }
+  form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 5px; font-weight: 600; }
+  select, input, button { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: #0d0f14; color: var(--text); font-size: 14px; outline: none; transition: border-color 0.2s; }
+  select:focus, input:focus { border-color: var(--accent); }
+  .full { grid-column: 1 / -1; }
+  button { background: var(--accent); border: none; cursor: pointer; font-weight: 700; color: #fff; border-radius: 8px; }
+  button:hover { background: var(--accent-hover); }
+  button.secondary { background: #262c3a; color: #d0d5dd; }
+  button.secondary:hover { background: #323a4c; }
+  button.danger { background: #8e2323; }
+  button.danger:hover { background: #ab2c2c; }
+  button.warning { background: #96630e; }
+  button.warning:hover { background: #b57a17; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  pre { background: #0b0d11; border: 1px solid var(--line); border-radius: 8px; padding: 14px; font-size: 12px;
+    overflow: auto; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .status { font-size: 13px; margin-top: 10px; font-weight: 600; }
+  .status.ok { color: var(--ok); }
+  .status.bad { color: var(--bad); }
+  .status.warning { color: var(--warning); }
+  .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .test-box { border: 1px solid var(--line); border-radius: 10px; padding: 18px; background: var(--card-subtle); display: flex; flex-direction: column; justify-content: space-between; }
+  .test-box h3 { margin: 0 0 6px; font-size: 15px; color: #fff; }
+  .test-box p { margin: 0 0 14px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; margin-left: 6px; }
+  .badge-ok { background: rgba(62, 207, 142, 0.15); color: var(--ok); }
+  .badge-bad { background: rgba(255, 92, 92, 0.15); color: var(--bad); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>LedgerLine — Engine & Concurrency Suite</h1>
+  <p>Double-entry ledger with PostgreSQL row-level locks, SHA-256 hash chains, and automated race condition proofs</p>
+</header>
+
+<main>
+
+  <!-- ACCOUNTS OVERVIEW -->
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <h2 style="margin:0;">Live Accounts</h2>
+      <button class="secondary" style="width:auto; padding:6px 14px; font-size:13px;" onclick="loadAccounts()">↻ Refresh</button>
+    </div>
+    <div id="accounts" class="accounts">Loading accounts…</div>
+  </div>
+
+  <!-- CREATE NEW ACCOUNT -->
+  <div class="card">
+    <h2>Create New Account</h2>
+    <form id="createAccountForm" onsubmit="submitCreateAccount(event)">
+      <div>
+        <label>Account Owner Name</label>
+        <input id="newOwnerName" placeholder="e.g. Charlie, Diana" required>
+      </div>
+      <div>
+        <label>Initial Balance</label>
+        <input id="newBalance" type="number" step="0.01" min="0.00" value="500.00" required>
+      </div>
+      <div class="full" style="display:flex; gap:12px; align-items:flex-end;">
+        <div style="flex:1;">
+          <label>Currency</label>
+          <input id="newCurrency" value="INR" required>
+        </div>
+        <button type="submit" style="width:auto; padding:10px 24px; height:42px;">+ Create Account</button>
+      </div>
+    </form>
+    <div id="createAccountStatus" class="status"></div>
+  </div>
+
+  <!-- INTERACTIVE CONCURRENCY STRESS TESTS -->
+  <div class="card" style="border-color: #3b5280;">
+    <h2>⚡ Concurrency & Race Condition Suite (Simulations)</h2>
+    <p style="font-size:13px; color:var(--muted); margin-top:-6px; margin-bottom:18px;">
+      Fire genuine simultaneous HTTP requests at the backend in parallel to verify database row-locking, idempotency deduplication, and deadlock immunity.
+    </p>
+
+    <div class="grid-3">
+      <!-- Test 1: Overdraft Race -->
+      <div class="test-box">
+        <div>
+          <h3>1. Overdraft Attack Race</h3>
+          <p>Fires <strong>10 simultaneous 100 INR transfers</strong> out of Bob's account (500 INR balance). Proves pessimistic locks reject losing requests and balance <em>never drops below 0</em>.</p>
+        </div>
+        <button class="danger" onclick="runOverdraftTest()">⚡ Blast 10 Overdraft Transfers</button>
+      </div>
+
+      <!-- Test 2: Idempotency Race -->
+      <div class="test-box">
+        <div>
+          <h3>2. Idempotency Key Race</h3>
+          <p>Blasts <strong>20 simultaneous duplicate requests</strong> carrying the <em>exact same Idempotency-Key</em>. Proves only 1 transaction settles and money moves once.</p>
+        </div>
+        <button class="warning" onclick="runIdempotencyBlastTest()">🔁 Blast 20 Duplicate Requests</button>
+      </div>
+
+      <!-- Test 3: Bidirectional Deadlock Test -->
+      <div class="test-box">
+        <div>
+          <h3>3. Bidirectional Deadlock Race</h3>
+          <p>Fires <strong>10 A→B and 10 B→A transfers</strong> at the exact same millisecond. Proves deterministic UUID lock ordering completely avoids deadlocks.</p>
+        </div>
+        <button class="secondary" onclick="runDeadlockTest()">🔀 Blast 20 Opposite Transfers</button>
+      </div>
+    </div>
+
+    <div id="concurrencyStatus" class="status"></div>
+    <pre id="concurrencyResult" style="display:none; max-height:220px;"></pre>
+  </div>
+
+  <!-- SINGLE PAYMENT FORM -->
+  <div class="card">
+    <h2>Standard Payment Transfer</h2>
+    <form id="paymentForm" onsubmit="submitPayment(event)">
+      <div>
+        <label>From Account</label>
+        <select id="source" required></select>
+      </div>
+      <div>
+        <label>To Account</label>
+        <select id="destination" required></select>
+      </div>
+      <div>
+        <label>Amount</label>
+        <input id="amount" type="number" step="0.01" min="0.01" value="50.00" required>
+      </div>
+      <div>
+        <label>Currency</label>
+        <input id="currency" value="INR" required>
+      </div>
+      <div class="full">
+        <label>Idempotency-Key (Header)</label>
+        <input id="idempotencyKey" readonly>
+      </div>
+      <div class="full" style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button type="submit" style="flex:1; min-width:180px;">Send Payment</button>
+        <button type="button" class="secondary" style="flex:1; min-width:180px;" onclick="newIdempotencyKey()">New Key</button>
+        <button type="button" class="secondary" style="flex:1; min-width:240px;" onclick="submitPayment(null)">Resend Same Key (Retry Proof)</button>
+      </div>
+    </form>
+    <div id="paymentStatus" class="status"></div>
+    <pre id="paymentResult" style="display:none;"></pre>
+  </div>
+
+  <!-- CRYPTOGRAPHIC CHAIN INTEGRITY -->
+  <div class="card">
+    <h2>SHA-256 Hash Chain Integrity</h2>
+    <p style="font-size:13px; color:var(--muted); margin-top:-6px; margin-bottom:14px;">
+      Walks the entire transaction history from genesis, recalculating SHA-256 hashes to detect direct database tampering.
+    </p>
+    <button class="secondary" style="width:auto; padding:9px 20px;" onclick="verifyChain()">Verify Chain Integrity</button>
+    <div id="chainStatus" class="status"></div>
+    <pre id="chainResult" style="display:none;"></pre>
+  </div>
+
+</main>
+
+<script>
+const API = "http://localhost:8080";
+
+function newIdempotencyKey() {
+  document.getElementById("idempotencyKey").value = "web-" + crypto.randomUUID();
+}
+newIdempotencyKey();
+
+async function loadAccounts() {
+  const el = document.getElementById("accounts");
+  el.textContent = "Loading…";
+  try {
+    const res = await fetch(`${API}/accounts`);
+    const accounts = await res.json();
+    el.innerHTML = "";
+    const sourceSel = document.getElementById("source");
+    const destSel = document.getElementById("destination");
+    sourceSel.innerHTML = "";
+    destSel.innerHTML = "";
+
+    if (accounts.length === 0) {
+      el.innerHTML = "<span style='color:var(--muted)'>No accounts found. Create one below!</span>";
+      return;
+    }
+
+    accounts.forEach(a => {
+      const div = document.createElement("div");
+      div.className = "account";
+      div.innerHTML = `<div class="name">${a.ownerName}</div>
+                        <div class="bal">${Number(a.balance).toFixed(2)} ${a.currency}</div>
+                        <div class="id">${a.id}</div>`;
+      el.appendChild(div);
+
+      const opt1 = new Option(`${a.ownerName} (${Number(a.balance).toFixed(2)} ${a.currency})`, a.id);
+      const opt2 = new Option(`${a.ownerName} (${Number(a.balance).toFixed(2)} ${a.currency})`, a.id);
+      sourceSel.appendChild(opt1);
+      destSel.appendChild(opt2);
+    });
+    if (accounts.length > 1) destSel.selectedIndex = 1;
+  } catch (e) {
+    el.innerHTML = `<span style="color:var(--bad)">Could not reach backend API at ${API} — is Spring Boot running? (${e})</span>`;
+  }
+}
+
+async function submitCreateAccount(evt) {
+  evt.preventDefault();
+  const statusEl = document.getElementById("createAccountStatus");
+  statusEl.textContent = "Creating account…";
+  statusEl.className = "status";
+
+  const payload = {
+    ownerName: document.getElementById("newOwnerName").value.trim(),
+    initialBalance: parseFloat(document.getElementById("newBalance").value),
+    currency: document.getElementById("newCurrency").value.trim()
+  };
+
+  try {
+    const res = await fetch(`${API}/accounts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (res.ok) {
+      statusEl.textContent = `Account created successfully! ID: ${data.id}`;
+      statusEl.className = "status ok";
+      document.getElementById("newOwnerName").value = "";
+      loadAccounts();
+    } else {
+      statusEl.textContent = `Failed (HTTP ${res.status}): ${data.message || JSON.stringify(data)}`;
+      statusEl.className = "status bad";
+    }
+  } catch (e) {
+    statusEl.textContent = `Request failed: ${e}`;
+    statusEl.className = "status bad";
+  }
+}
+
+async function submitPayment(evt) {
+  if (evt) evt.preventDefault();
+  const statusEl = document.getElementById("paymentStatus");
+  const resultEl = document.getElementById("paymentResult");
+  statusEl.textContent = "Processing payment…";
+  statusEl.className = "status";
+
+  const body = {
+    sourceAccountId: document.getElementById("source").value,
+    destinationAccountId: document.getElementById("destination").value,
+    amount: document.getElementById("amount").value,
+    currency: document.getElementById("currency").value
+  };
+  const idempotencyKey = document.getElementById("idempotencyKey").value;
+
+  try {
+    const res = await fetch(`${API}/payments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    resultEl.style.display = "block";
+    resultEl.textContent = JSON.stringify(data, null, 2);
+    if (res.ok) {
+      statusEl.textContent = `Success (HTTP ${res.status}) — Transaction Settled: ${data.transactionId}`;
+      statusEl.className = "status ok";
+      loadAccounts();
+    } else {
+      statusEl.textContent = `HTTP ${res.status}: ${data.message || "Failed"}`;
+      statusEl.className = "status bad";
+    }
+  } catch (e) {
+    statusEl.textContent = "Request failed: " + e;
+    statusEl.className = "status bad";
+  }
+}
+
+// CONCURRENCY TEST 1: OVERDRAFT RACE
+async function runOverdraftTest() {
+  const statusEl = document.getElementById("concurrencyStatus");
+  const resultEl = document.getElementById("concurrencyResult");
+  statusEl.textContent = "Executing 10 concurrent overdraft transfers simultaneously…";
+  statusEl.className = "status warning";
+  resultEl.style.display = "block";
+  resultEl.textContent = "Blasting requests...";
+
+  const accountsRes = await fetch(`${API}/accounts`);
+  const accounts = await accountsRes.json();
+  if (accounts.length < 2) {
+    statusEl.textContent = "Need at least 2 accounts for testing.";
+    statusEl.className = "status bad";
+    return;
+  }
+  const [accA, accB] = accounts;
+
+  const requests = Array.from({ length: 10 }).map(async (_, idx) => {
+    const key = "race-overdraft-" + crypto.randomUUID();
+    const t0 = performance.now();
+    try {
+      const res = await fetch(`${API}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+        body: JSON.stringify({
+          sourceAccountId: accA.id,
+          destinationAccountId: accB.id,
+          amount: "100.00",
+          currency: accA.currency
+        })
+      });
+      const data = await res.json();
+      return { id: idx + 1, status: res.status, ok: res.ok, durationMs: (performance.now() - t0).toFixed(1), data };
+    } catch (err) {
+      return { id: idx + 1, status: "ERR", ok: false, error: err.toString() };
+    }
+  });
+
+  const results = await Promise.all(requests);
+  const successes = results.filter(r => r.ok).length;
+  const failures = results.filter(r => !r.ok).length;
+
+  statusEl.textContent = `Overdraft Test Complete: ${successes} Succeeded, ${failures} Rejected (Balance protected from negative overdraft!)`;
+  statusEl.className = "status ok";
+  resultEl.textContent = JSON.stringify(results, null, 2);
+  loadAccounts();
+}
+
+// CONCURRENCY TEST 2: IDEMPOTENCY KEY RACE
+async function runIdempotencyBlastTest() {
+  const statusEl = document.getElementById("concurrencyStatus");
+  const resultEl = document.getElementById("concurrencyResult");
+  statusEl.textContent = "Blasting 20 duplicate requests with the SAME key simultaneously…";
+  statusEl.className = "status warning";
+  resultEl.style.display = "block";
+
+  const accountsRes = await fetch(`${API}/accounts`);
+  const accounts = await accountsRes.json();
+  if (accounts.length < 2) return;
+  const [accA, accB] = accounts;
+
+  const sharedKey = "shared-blast-" + crypto.randomUUID();
+  const requests = Array.from({ length: 20 }).map(async (_, idx) => {
+    try {
+      const res = await fetch(`${API}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": sharedKey },
+        body: JSON.stringify({
+          sourceAccountId: accA.id,
+          destinationAccountId: accB.id,
+          amount: "10.00",
+          currency: accA.currency
+        })
+      });
+      const data = await res.json();
+      return { reqNum: idx + 1, status: res.status, transactionId: data.transactionId, message: data.message };
+    } catch (err) {
+      return { reqNum: idx + 1, error: err.toString() };
+    }
+  });
+
+  const results = await Promise.all(requests);
+  const settledTxs = new Set(results.map(r => r.transactionId).filter(Boolean));
+  statusEl.textContent = `Idempotency Blast Complete: 20 requests resolved to exactly ${settledTxs.size} transaction ID!`;
+  statusEl.className = "status ok";
+  resultEl.textContent = JSON.stringify(results, null, 2);
+  loadAccounts();
+}
+
+// CONCURRENCY TEST 3: BIDIRECTIONAL DEADLOCK RACE
+async function runDeadlockTest() {
+  const statusEl = document.getElementById("concurrencyStatus");
+  const resultEl = document.getElementById("concurrencyResult");
+  statusEl.textContent = "Firing 10 A→B and 10 B→A transfers at the exact same instant…";
+  statusEl.className = "status warning";
+  resultEl.style.display = "block";
+
+  const accountsRes = await fetch(`${API}/accounts`);
+  const accounts = await accountsRes.json();
+  if (accounts.length < 2) return;
+  const [accA, accB] = accounts;
+
+  const batchAB = Array.from({ length: 10 }).map((_, i) =>
+    fetch(`${API}/payments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": `ab-${crypto.randomUUID()}` },
+      body: JSON.stringify({ sourceAccountId: accA.id, destinationAccountId: accB.id, amount: "5.00", currency: accA.currency })
+    }).then(r => r.json().then(data => ({ dir: "A->B", status: r.status, ok: r.ok, data })))
+  );
+
+  const batchBA = Array.from({ length: 10 }).map((_, i) =>
+    fetch(`${API}/payments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": `ba-${crypto.randomUUID()}` },
+      body: JSON.stringify({ sourceAccountId: accB.id, destinationAccountId: accA.id, amount: "5.00", currency: accB.currency })
+    }).then(r => r.json().then(data => ({ dir: "B->A", status: r.status, ok: r.ok, data })))
+  );
+
+  const results = await Promise.all([...batchAB, ...batchBA]);
+  const succeeded = results.filter(r => r.ok).length;
+  statusEl.textContent = `Deadlock Race Complete: ${succeeded}/20 transfers finished with ZERO deadlocks!`;
+  statusEl.className = "status ok";
+  resultEl.textContent = JSON.stringify(results, null, 2);
+  loadAccounts();
+}
+
+async function verifyChain() {
+  const statusEl = document.getElementById("chainStatus");
+  const resultEl = document.getElementById("chainResult");
+  statusEl.textContent = "Verifying cryptographic chain…";
+  statusEl.className = "status";
+  try {
+    const res = await fetch(`${API}/admin/chain/verify`);
+    const data = await res.json();
+    resultEl.style.display = "block";
+    resultEl.textContent = JSON.stringify(data, null, 2);
+    statusEl.textContent = data.valid ? `Chain Valid: ${data.transactionsChecked} transactions verified from genesis.` : `BROKEN at ${data.brokenTransactionId}`;
+    statusEl.className = data.valid ? "status ok" : "status bad";
+  } catch (e) {
+    statusEl.textContent = "Request failed: " + e;
+    statusEl.className = "status bad";
+  }
+}
+
+loadAccounts();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,23 @@
+spring:
+  application:
+    name: ledgerline
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ledgerline
+    username: ledgerline
+    password: ledgerline
+
+  jpa:
+    hibernate:
+      ddl-auto: validate   # schema is owned by Flyway migrations, not Hibernate
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+server:
+  port: 8080
