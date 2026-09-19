@@ -74,7 +74,7 @@ mvn test
 ```
 
 This pulls a real Postgres via Testcontainers (needs Docker running) and
-fires 50 genuinely concurrent duplicate requests, plus 10 concurrent
+fires 20 genuinely concurrent duplicate requests, plus 10 concurrent
 overdraft attempts, at the actual service. Read the test file — the
 assertions are the whole point of the project.
 
